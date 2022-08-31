@@ -4,7 +4,6 @@ import           Control.Exception              ( SomeException
                                                 , catch
                                                 , evaluate
                                                 )
-import           Data.Binary                    ( Binary )
 import           Data.Char                      ( isAlphaNum
                                                 , isDigit
                                                 , isSpace
@@ -216,32 +215,6 @@ parseListOf p = brackets $ p `sepBy` symbol ","
 choice :: String -> [Parser a] -> Parser a
 choice desc = foldr (<|>) noMatch where noMatch = parseError desc "no match"
 
-data Value
-  = ValueNull -- null
-  | ValueString String -- "řetězec"
-  | ValueInt Int -- (+-)?123456
-  | ValueBool Bool -- true / false
-  | ValueList [Value] -- [_, _, _]
-  deriving (Eq, Show)
-
-parseBool :: Parser Bool
-parseBool = choice "parseBool" [true, false]
-  where
-    true  = symbol "true" >> return True
-    false = symbol "false" >> return False
-
-
-parseValue :: Parser Value
-parseValue = do
-    _ <- spaces
-    choice
-        "list of values or string or number or bool or null"
-        [ ValueList <$> parseListOf parseValue
-        , ValueString <$> parseQuotedString
-        , ValueBool <$> parseBool
-        , ValueInt <$> number
-        ]
-
 
 
 parseBinaryOp
@@ -287,7 +260,7 @@ parseMulOp = choice
 
 
 parseId = many1 $ satisfy "parseId" isAlphaNum
-parseVar = Var <$> parseId
+parseVar = VarExpression <$> parseId
 
 braces :: Parser a -> Parser a
 braces = between (symbol "(") (symbol ")")
@@ -299,8 +272,8 @@ parseFunctionCall = FunctionCall <$> parseId <*> parseExprList
 parseFactor :: Parser Expression
 parseFactor = choice
     "functor"
-    [ parseFunctionCall -- f(x,y)
-    , Number <$> number -- 1234
+    [ FunctionCallExpression <$> parseFunctionCall -- f(x,y)
+    , ValueExpression <$> IntValue <$> number -- 1234
     , braces parseExpression --(expression)
     , parseSigned parseFactor -- +x, -x
     , parseVar -- x

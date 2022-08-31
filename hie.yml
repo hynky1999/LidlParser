@@ -1,0 +1,7 @@
+cradle:
+  cabal:
+    - path: "app"
+      component: "LidlParser:lib:interpret"
+
+    - path: "test"
+      component: "LidlParser:test:tests"
