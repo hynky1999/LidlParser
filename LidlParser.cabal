@@ -25,7 +25,6 @@ extra-source-files:
 
 
 library interpret
-    main-is:          Main.hs
     exposed-modules: Parser Interpreter Expressions
     other-modules: State
 
@@ -39,12 +38,24 @@ library interpret
     hs-source-dirs:   app
     default-language: Haskell2010
 
+executable lidl-parser
+    main-is: app/Main.hs
+    build-depends: base ^>=4.14.3.0, interpret, containers
 
-test-suite tests
+
+test-suite testsInterpreter
     default-language: Haskell2010
     type: exitcode-stdio-1.0
-    hs-source-dirs: test
-    main-is: Tests.hs
+    main-is: test/TestsInterpret.hs
+    build-depends:  base ^>=4.14.1.0,
+                    containers,
+                    interpret,
+                    hspec
+
+test-suite testsParser
+    default-language: Haskell2010
+    type: exitcode-stdio-1.0
+    main-is: test/TestsParser.hs
     build-depends:  base ^>=4.14.1.0,
                     containers,
                     interpret,

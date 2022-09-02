@@ -7,6 +7,7 @@ module Interpreter where
 
 import qualified Data.Map                      as Map
 
+import           Control.Monad.IO.Class
 import           Expressions
 import           State
 
@@ -22,14 +23,15 @@ data Store = Store
     }
     deriving (Show, Eq)
 
-newtype Interpreter a = Interpreter {runInterpreter :: State Store (Either RuntimeError a)}
+newtype Interpreter a = Interpreter {runInterpreter :: State Store (Either RuntimeError (IO a))}
 
 mapParser :: (a -> b) -> Interpreter a -> Interpreter b
 mapParser f (Interpreter p) = Interpreter $ do
     result <- p
     case result of
         Left  err -> return $ Left err
-        Right a   -> return $ Right $ f a
+        Right a   -> return $ Right $ fmap f a
+
 
 
 instance Functor Interpreter where
@@ -37,15 +39,21 @@ instance Functor Interpreter where
 
 returnParser :: a -> Interpreter a
 returnParser x = Interpreter $ do
-    return $ Right x
+    return $ Right $ return x
+
 
 bindInterpreter :: Interpreter a -> (a -> Interpreter b) -> Interpreter b
 bindInterpreter (Interpreter p) f = Interpreter $ do
     result <- p
     case result of
-        Right x   -> runInterpreter (f x)
-        Left  err -> return $ Left err
+        Right x   -> undefined
 
+---- HOW to do this ???????
+----- I Need to get a but I only have IO a
+
+
+
+        Left  err -> return $ Left err
 
 instance Monad Interpreter where
     return = returnParser
@@ -60,29 +68,30 @@ instance Applicative Interpreter where
 
 getInterpreter :: Interpreter Store
 getInterpreter = Interpreter $ do
-    Right <$> get
+    s <- get
+    return $ Right $ return s
 
 setInterpreter :: Store -> Interpreter ()
 setInterpreter store = Interpreter $ do
     set store
-    return $ Right ()
+    return $ Right $ return ()
 
 modifyInterpreter :: (Store -> Store) -> Interpreter ()
 modifyInterpreter f = Interpreter $ do
     store <- get
     set $ f store
-    return $ Right ()
+    return $ Right $ return ()
 
 raiseError :: RuntimeError -> Interpreter a
 raiseError err = Interpreter $ do
     return $ Left err
 
 
-run :: Interpreter a -> Store -> Either RuntimeError a
-run (Interpreter p) store = snd $ runState p store
+interpret :: Interpreter a -> Store -> Either RuntimeError (IO a)
+interpret (Interpreter p) store = snd $ runState p store
 
-runDebug :: Interpreter a -> Store -> Store
-runDebug (Interpreter p) store = fst $ runState p store
+interpretDebug :: Interpreter a -> Store -> Store
+interpretDebug (Interpreter p) store = fst $ runState p store
 
 --------------------------------------------------------------------------------
 
@@ -183,6 +192,20 @@ evalStatement stmt = case stmt of
     FunctionDef name fc       -> evalFunctionDef name fc
 
 
+
+
+writeIO :: String -> Interpreter ()
+writeIO str = Interpreter $ do
+    return $ Right $ putStrLn str
+
+
+evalBuiltinCall :: [Expression] -> Interpreter Value
+evalBuiltinCall exprs = do
+    vals <- mapM evalExpr exprs
+    mapM_ writeIO (map show vals)
+    return Null
+
+
 evalAssign :: Id -> Expression -> Interpreter ()
 evalAssign name expr = do
     val   <- evalExpr expr
@@ -240,6 +263,10 @@ evalBlock stmts = do
     mapM_ evalStatement stmts
 
 
+evalProgram :: Program -> Interpreter ()
+evalProgram (Program _ stmts) = evalBlock stmts
+
+
 --------------------------------------------------------------------------------
 -- Unfortunately it has to be defined function by function and not type by type :/
 
@@ -248,6 +275,8 @@ evalNumOp op (IntValue this) other = case other of
     IntValue o -> case op of
         Add -> return $ IntValue $ this + o
         Mul -> return $ IntValue $ this * o
+        Sub -> return $ IntValue $ this - o
+        Div -> return $ IntValue $ this `div` o
     _ -> raiseError "Invalid operation"
 
 evalNumOp _ (BoolValue _) _ = raiseError "Invalid operation"
