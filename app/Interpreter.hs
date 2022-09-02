@@ -23,14 +23,15 @@ data Store = Store
     }
     deriving (Show, Eq)
 
-newtype Interpreter a = Interpreter {runInterpreter :: State Store (Either RuntimeError a)}
+newtype Interpreter a = Interpreter {runInterpreter :: State Store (Either RuntimeError (IO a))}
 
 mapParser :: (a -> b) -> Interpreter a -> Interpreter b
 mapParser f (Interpreter p) = Interpreter $ do
     result <- p
     case result of
         Left  err -> return $ Left err
-        Right a   -> return $ Right $ f a
+        Right a   -> return $ Right $ fmap f a
+
 
 
 instance Functor Interpreter where
@@ -38,15 +39,21 @@ instance Functor Interpreter where
 
 returnParser :: a -> Interpreter a
 returnParser x = Interpreter $ do
-    return $ Right x
+    return $ Right $ return x
+
 
 bindInterpreter :: Interpreter a -> (a -> Interpreter b) -> Interpreter b
 bindInterpreter (Interpreter p) f = Interpreter $ do
     result <- p
     case result of
-        Right x   -> runInterpreter (f x)
-        Left  err -> return $ Left err
+        Right x   -> undefined
 
+---- HOW to do this ???????
+----- I Need to get a but I only have IO a
+
+
+
+        Left  err -> return $ Left err
 
 instance Monad Interpreter where
     return = returnParser
@@ -61,25 +68,26 @@ instance Applicative Interpreter where
 
 getInterpreter :: Interpreter Store
 getInterpreter = Interpreter $ do
-    Right <$> get
+    s <- get
+    return $ Right $ return s
 
 setInterpreter :: Store -> Interpreter ()
 setInterpreter store = Interpreter $ do
     set store
-    return $ Right ()
+    return $ Right $ return ()
 
 modifyInterpreter :: (Store -> Store) -> Interpreter ()
 modifyInterpreter f = Interpreter $ do
     store <- get
     set $ f store
-    return $ Right ()
+    return $ Right $ return ()
 
 raiseError :: RuntimeError -> Interpreter a
 raiseError err = Interpreter $ do
     return $ Left err
 
 
-interpret :: Interpreter a -> Store -> Either RuntimeError a
+interpret :: Interpreter a -> Store -> Either RuntimeError (IO a)
 interpret (Interpreter p) store = snd $ runState p store
 
 interpretDebug :: Interpreter a -> Store -> Store
@@ -181,18 +189,21 @@ evalStatement stmt = case stmt of
     If cond ifBlock elseBlock -> evalIf cond ifBlock elseBlock
     While cond block          -> evalWhile cond block
     FunctionCallStmt fcCall   -> evalFunctionCall fcCall >> return ()
-    --BuiltingCallStmt fc   exprs -> evalBuiltInCall fc exprs >> return ()
     FunctionDef name fc       -> evalFunctionDef name fc
 
 
 
 
+writeIO :: String -> Interpreter ()
+writeIO str = Interpreter $ do
+    return $ Right $ putStrLn str
 
 
-
-
-
-
+evalBuiltinCall :: [Expression] -> Interpreter Value
+evalBuiltinCall exprs = do
+    vals <- mapM evalExpr exprs
+    mapM_ writeIO (map show vals)
+    return Null
 
 
 evalAssign :: Id -> Expression -> Interpreter ()
@@ -247,12 +258,12 @@ evalWhile cond block = do
 
 --------------------------------------------------------------------------------
 
-evalBlock :: Block -> IO (Interpreter ())
+evalBlock :: Block -> Interpreter ()
 evalBlock stmts = do
     mapM_ evalStatement stmts
 
 
-evalProgram :: Program -> IO (Interpreter ())
+evalProgram :: Program -> Interpreter ()
 evalProgram (Program _ stmts) = evalBlock stmts
 
 
