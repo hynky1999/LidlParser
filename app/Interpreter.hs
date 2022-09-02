@@ -7,6 +7,7 @@ module Interpreter where
 
 import qualified Data.Map                      as Map
 
+import           Control.Monad.IO.Class
 import           Expressions
 import           State
 
@@ -78,11 +79,11 @@ raiseError err = Interpreter $ do
     return $ Left err
 
 
-run :: Interpreter a -> Store -> Either RuntimeError a
-run (Interpreter p) store = snd $ runState p store
+interpret :: Interpreter a -> Store -> Either RuntimeError a
+interpret (Interpreter p) store = snd $ runState p store
 
-runDebug :: Interpreter a -> Store -> Store
-runDebug (Interpreter p) store = fst $ runState p store
+interpretDebug :: Interpreter a -> Store -> Store
+interpretDebug (Interpreter p) store = fst $ runState p store
 
 --------------------------------------------------------------------------------
 
@@ -180,7 +181,18 @@ evalStatement stmt = case stmt of
     If cond ifBlock elseBlock -> evalIf cond ifBlock elseBlock
     While cond block          -> evalWhile cond block
     FunctionCallStmt fcCall   -> evalFunctionCall fcCall >> return ()
+    --BuiltingCallStmt fc   exprs -> evalBuiltInCall fc exprs >> return ()
     FunctionDef name fc       -> evalFunctionDef name fc
+
+
+
+
+
+
+
+
+
+
 
 
 evalAssign :: Id -> Expression -> Interpreter ()
@@ -235,9 +247,13 @@ evalWhile cond block = do
 
 --------------------------------------------------------------------------------
 
-evalBlock :: Block -> Interpreter ()
+evalBlock :: Block -> IO (Interpreter ())
 evalBlock stmts = do
     mapM_ evalStatement stmts
+
+
+evalProgram :: Program -> IO (Interpreter ())
+evalProgram (Program _ stmts) = evalBlock stmts
 
 
 --------------------------------------------------------------------------------
@@ -248,6 +264,8 @@ evalNumOp op (IntValue this) other = case other of
     IntValue o -> case op of
         Add -> return $ IntValue $ this + o
         Mul -> return $ IntValue $ this * o
+        Sub -> return $ IntValue $ this - o
+        Div -> return $ IntValue $ this `div` o
     _ -> raiseError "Invalid operation"
 
 evalNumOp _ (BoolValue _) _ = raiseError "Invalid operation"

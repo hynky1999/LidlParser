@@ -4,7 +4,7 @@ module Expressions where
 
 data RelOp = Eq | Neq deriving (Show, Eq)
 
-data NumOp = Add | Mul deriving (Show, Eq)
+data NumOp = Add | Sub | Mul | Div deriving (Show, Eq)
 
 data UnaryOp = Neg | Not | Pos deriving (Show, Eq)
 
@@ -49,14 +49,19 @@ data Func = Func
     }
     deriving (Show, Eq)
 
--- | Příkazy samy o sobě nemají hodnotu, ale manipulují s proměnnými
+data BuiltinFc = Print
+    deriving (Show, Eq)
+
 data Statement = Assign Id Expression        -- <var> = <expr>
-                | Define Id Type
+                | Define Id Type -- type <var>
                 | FunctionCallStmt FunctionCall -- f(x)
+                | BuiltingCallStmt BuiltinFc [Expression] -- builtin(x,y)
                 | If Expression Block Block -- if <expr> <block> else <block>
                 | While Expression Block -- while <expr> <block>
-                | FunctionDef Id Func
+                | FunctionDef Id Func -- def <id> <func>
     deriving (Show, Eq)
 
 -- | Skupina příkazů je blok
 type Block = [Statement]
+data Program = Program Id Block
+    deriving (Show, Eq)

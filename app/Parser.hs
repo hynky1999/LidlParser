@@ -1,6 +1,9 @@
 module Parser where
 
-import           Control.Exception              ( SomeException
+import           Control.Exception              ( AssertionFailed
+                                                    ( AssertionFailed
+                                                    )
+                                                , SomeException
                                                 , catch
                                                 , evaluate
                                                 )
@@ -16,7 +19,7 @@ import           System.IO                      ( hSetEncoding
                                                 )
 import           System.IO.Unsafe               ( unsafePerformIO )
 
-import  Expressions
+import           Expressions
 
 
 data ParseError = ParseError
@@ -31,12 +34,7 @@ instance Show ParseError where
         "expected: " <> errorExpected err <> ", but found: " <> errorFound err
 
 newtype Parser a = Parser {runParser :: State String (Either ParseError a)}
-execParser :: Parser a -> String -> Either ParseError a
-execParser p = snd . runState (runParser p)
 
-
-finalStateParser :: Parser a -> String -> String
-finalStateParser p = fst . runState (runParser p)
 
 parseEof :: Parser ()
 parseEof = Parser $ do
@@ -128,8 +126,8 @@ satisfy description p = do -- do-notace pro 'Parser Char'
     if p c then return c else parseError description [c]
 
 
-run :: Parser a -> String -> Either ParseError a
-run p s = snd $ runState (runParser go) s
+parse :: Parser a -> String -> Either ParseError a
+parse p s = snd $ runState (runParser go) s
   where
     go = do -- do-notace pro 'Parser a'
         result <- p
@@ -138,15 +136,6 @@ run p s = snd $ runState (runParser go) s
 
 char :: Char -> Parser Char
 char c = satisfy [c] (== c)
-
-parseAhoj :: Parser String
-parseAhoj = do
-    _ <- char 'a'
-    _ <- char 'h'
-    _ <- char 'o'
-    _ <- char 'j'
-    return "ahoj"
-
 
 space :: Parser Char
 space = satisfy "space" isSpace
@@ -168,8 +157,23 @@ string s = mapM char s
 
 
 number :: Parser Int
-number = read <$> many1 (satisfy "parseDigit" isDigit)
+number = read <$> removeSucceddingSpaces (many1 (satisfy "parseDigit" isDigit))
 
+optional :: Parser a -> Parser (Maybe a)
+optional x = (Just <$> x) <|> return Nothing
+
+
+parseLeftAssoc p op = do
+    x <- p
+    process x
+  where
+    process x = do
+        maybef <- optional op -- parses or returns Nothing on fail
+        case maybef of
+            Nothing -> return x
+            Just f  -> do
+                y <- p
+                process (f x y)
 
 spaces :: Parser String
 spaces = many space
@@ -217,55 +221,52 @@ choice desc = foldr (<|>) noMatch where noMatch = parseError desc "no match"
 
 
 
-parseBinaryOp
-    :: (Expression -> Expression -> a)
-    -> Parser String
-    -> Parser Expression
-    -> Parser Expression
-    -> Parser a
-parseBinaryOp trans parserChar parserExp parserExp2 =
-    trans <$> parserExp <*> (parserChar >> parserExp2)
-
+------------------------------------------
 parseUnaryOp
     :: (Expression -> a) -> Parser String -> Parser Expression -> Parser a
 parseUnaryOp trans parserChar parserExp = trans <$> (parserChar >> parserExp)
 
 
-
-
-
-
-
 parseRelOp :: Parser Expression
-parseRelOp = choice
-    "parseRelOp"
-    [ parseBinaryOp (RelExpression Eq) (symbol "==") parseAddOp parseAddOp
-    , parseAddOp
-    ]
+parseRelOp =
+    parseLeftAssoc parseAddOp (symbol "==" >> return (RelExpression Eq))
 
 
 parseAddOp :: Parser Expression
-parseAddOp = choice
-    "parserNumOp"
-    [ parseBinaryOp (NumExpression Add) (symbol "+") parseMulOp parseAddOp
-    , parseMulOp
-    ]
+parseAddOp = parseLeftAssoc
+    parseMulOp
+    (choice
+        "additive / substract"
+        [ symbol "+" >> return (NumExpression Add)
+        , symbol "-" >> return (NumExpression Sub)
+        ]
+    )
 
 parseMulOp :: Parser Expression
-parseMulOp = choice
-    "parseMulOp"
-    [ parseBinaryOp (NumExpression Mul) (symbol "*") parseFactor parseMulOp -- 1*2
-    , parseFactor
-    ]
+parseMulOp = parseLeftAssoc
+    parseFactor
+    (choice
+        "multiple / divide"
+        [ symbol "*" >> return (NumExpression Mul)
+        , symbol "/" >> return (NumExpression Div)
+        ]
+    )
 
 
-parseId = many1 $ satisfy "parseId" isAlphaNum
+removeSucceddingSpaces :: Parser a -> Parser a
+removeSucceddingSpaces p = do
+    x <- p
+    _ <- spaces
+    return x
+
+
+parseId = removeSucceddingSpaces (many1 $ satisfy "parseId" isAlphaNum)
 parseVar = VarExpression <$> parseId
 
-braces :: Parser a -> Parser a
-braces = between (symbol "(") (symbol ")")
+parens :: Parser a -> Parser a
+parens = between (symbol "(") (symbol ")")
 
-parseExprList = braces $ parseExpression `sepBy` symbol ","
+parseExprList = parens $ parseExpression `sepBy` symbol ","
 parseFunctionCall = FunctionCall <$> parseId <*> parseExprList
 
 
@@ -274,7 +275,7 @@ parseFactor = choice
     "functor"
     [ FunctionCallExpression <$> parseFunctionCall -- f(x,y)
     , ValueExpression <$> IntValue <$> number -- 1234
-    , braces parseExpression --(expression)
+    , parens parseExpression --(expression)
     , parseSigned parseFactor -- +x, -x
     , parseVar -- x
     ]
@@ -289,3 +290,109 @@ parseSigned exp = choice
 
 parseExpression :: Parser Expression
 parseExpression = parseRelOp
+
+---------------------------------
+-- Statements
+parseStatement :: Parser Statement
+parseStatement = choice
+    "parseStatment"
+    [ Assign <$> parseId <*> (symbol ":=" >> parseExpression)
+    , FunctionCallStmt <$> parseFunctionCall
+    , parseIfStatement
+    , parseWhileStatement
+    ]
+
+
+parseCompoundStatement :: Parser Block
+parseCompoundStatement = do
+    _     <- symbol "begin"
+    stmts <- many $ parseInfront parseStatement (symbol ";")
+    _     <- symbol "end"
+    return stmts
+
+
+parseSimpleOrCompoundStatement :: Parser Block
+parseSimpleOrCompoundStatement =
+    parseCompoundStatement <|> ((: []) <$> parseStatement)
+
+
+parseIfStatement :: Parser Statement
+parseIfStatement = do
+    _        <- symbol "if"
+    cond     <- parseExpression
+    _        <- symbol "then"
+    thenStmt <- parseSimpleOrCompoundStatement
+    _        <- symbol "else"
+    elseStmt <- optional parseSimpleOrCompoundStatement
+    case elseStmt of
+        Nothing -> return $ If cond thenStmt []
+        Just st -> return $ If cond thenStmt st
+
+parseWhileStatement :: Parser Statement
+parseWhileStatement = do
+    _    <- symbol "while"
+    cond <- parseExpression
+    _    <- symbol "do"
+    While cond <$> parseSimpleOrCompoundStatement
+
+
+
+parseType :: Parser Type
+parseType = choice
+    "parseType"
+    [symbol "integer" >> return IntType, symbol "boolean" >> return BoolType]
+
+parseIdListWithType :: Parser [(Id, Type)]
+parseIdListWithType = do
+    ids   <- parseId `sepBy1` symbol ","
+    _     <- symbol ":"
+    type' <- parseType
+    return $ map (\id -> (id, type')) ids
+
+parseVarDeclaration :: Parser [Statement]
+parseVarDeclaration = do
+    _ <- symbol "var"
+    typeDefsAsStatement <$> parseIdListWithType
+
+
+typeDefsAsStatement :: [(Id, Type)] -> [Statement]
+typeDefsAsStatement = map (uncurry Define)
+
+parseFunctionDeclaration :: Parser Statement
+parseFunctionDeclaration = do
+    _    <- symbol "function"
+    name <- parseId
+    args <-
+        concat <$> parens (parseIdListWithType `sepBy` symbol ";") <|> return []
+    _       <- symbol ":"
+    retType <- parseType
+    body    <- parseBlock
+    return $ FunctionDef name (Func args body name retType)
+
+
+
+
+parseBlock :: Parser Block
+parseBlock = do
+    vars <- concat <$> many (parseInfront parseVarDeclaration (symbol ";"))
+    fcs  <- many $ parseInfront parseFunctionDeclaration (symbol ";")
+    body <- parseCompoundStatement
+    return $ vars ++ fcs ++ body
+
+
+parseProgram :: Parser Program
+parseProgram = do
+    _     <- symbol "program"
+    name  <- parseInfront parseId (symbol ";")
+    block <- parseBlock
+    _     <- symbol "."
+    return $ Program name block
+
+
+
+
+parseInfront :: Parser a -> Parser b -> Parser a
+parseInfront p1 p2 = do
+    x <- p1
+    _ <- p2
+    return x
