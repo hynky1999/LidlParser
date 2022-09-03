@@ -1,0 +1,21 @@
+program exFunction;
+var a,b,ret : integer;
+   
+function max(num1, num2: integer): integer;
+var result, a : integer;
+
+begin
+   if (num1 > num2) then
+      result := num1
+   else
+      result := num2;
+   max := result;
+end;
+
+begin
+   a := ReadLn();
+   b := ReadLn();
+   ret := max(a, b);
+   
+   WriteLn(2);
+end.

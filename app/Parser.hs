@@ -219,6 +219,7 @@ parseMulOp = parseLeftAssoc
         "multiple / divide"
         [ symbol "*" >> return (NumExpression Mul)
         , symbol "/" >> return (NumExpression Div)
+        , symbol "mod" >> return (NumExpression Mod)
         ]
     )
 

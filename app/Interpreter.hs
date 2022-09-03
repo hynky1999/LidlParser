@@ -315,6 +315,7 @@ evalNumOp op (IntValue this) other = case other of
         Mul -> return $ IntValue $ this * o
         Sub -> return $ IntValue $ this - o
         Div -> return $ IntValue $ this `div` o
+        Mod -> return $ IntValue $ this `mod` o
     _ -> raiseError "Invalid operation"
 
 evalNumOp _ (BoolValue _) _ = raiseError "Invalid operation"

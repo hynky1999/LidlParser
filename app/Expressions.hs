@@ -4,7 +4,7 @@ module Expressions where
 
 data RelOp = Eq | Neq | Ge | Le | Gt | Lt deriving (Show, Eq)
 
-data NumOp = Add | Sub | Mul | Div deriving (Show, Eq)
+data NumOp = Add | Sub | Mul | Div | Mod deriving (Show, Eq)
 
 data UnaryOp = Neg | Not | Pos deriving (Show, Eq)
 
