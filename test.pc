@@ -1,0 +1,14 @@
+program HelloWorld;
+
+var x,y : integer;
+begin
+    x:= 1;
+    x:= -50/2;
+    WriteLn(x);
+    x:= ReadLn();
+    WriteLn(x);
+    y := 3;
+    y := y mod 2;
+    WriteLn(y);
+    
+end. 
