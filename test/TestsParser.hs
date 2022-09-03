@@ -91,7 +91,7 @@ parserStatements = do
                 )
             )
     it "should parse if statement" $ do
-        parse parseIfStatement "if x==1 then x:=2 else begin x:=3; end"
+        parse parseIfStatement "if (x==1) then x:=2 else begin x:=3; end"
             `shouldBe` Right
                            (If
                                (RelExpression Eq
@@ -99,7 +99,9 @@ parserStatements = do
                                               (ValueExpression (IntValue 1))
                                )
                                [Assign "x" (ValueExpression (IntValue 2))]
-                               [Assign "x" (ValueExpression (IntValue 3))]
+                               [ CompoundStmt
+                                     [Assign "x" (ValueExpression (IntValue 3))]
+                               ]
                            )
     it "should parse while statement" $ do
         parse parseStatement "while x==1 do x:=2" `shouldBe` Right
@@ -119,7 +121,7 @@ parserFunction = do
 
     it "should parse function" $ do
         parse parseFunctionDeclaration
-              "function f(x,y : integer) : integer\nbegin\nf:=x+y;\nend"
+              "function f(x,y : integer) : integer;\nbegin\nf:=x+y;\nend"
             `shouldBe` Right
                            (DefFc
                                "f"
@@ -136,6 +138,43 @@ parserFunction = do
                                    IntType
                                )
                            )
+    it "should run complex function"
+        $          do
+                       parse
+                           parseFunctionDeclaration
+                           "function max(num1, num2: integer): integer;\n \
+                \var\n \
+                \result: integer;\n \
+                \\n\
+                \begin\n\
+                \if (num1 == num2) then\n\
+                \    result := num1\n\
+                \else\
+                \    result := num2;\
+                \max := result;\
+                \end"
+        `shouldBe` Right
+                       (DefFc
+                           "max"
+                           (Func
+                               [("num1", IntType), ("num2", IntType)]
+                               [ DefVar "result" IntType
+                               , If
+                                   (RelExpression Eq
+                                                  (VarExpression "num1")
+                                                  (VarExpression "num2")
+                                   )
+                                   [Assign "result" (VarExpression "num1")]
+                                   [Assign "result" (VarExpression "num2")]
+                               , Assign "max" (VarExpression "result")
+                               ]
+                               "max"
+                               IntType
+                           )
+                       )
+
+
+
     it "should parse program" $ do
         parse parseProgram
               "program p;\nvar x,y : integer;\nbegin\nx:=1;\ny:=2;\nend."

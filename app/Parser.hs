@@ -31,7 +31,7 @@ liftStateOp :: StateT String (ExceptT ParseError DummyMonad) a -> Parser a
 liftStateOp = Parser
 
 getParser :: Parser String
-getParser = liftStateOp get
+getParser = liftStateOp get'
 
 setParser :: String -> Parser ()
 setParser store = Parser $ set store
@@ -40,7 +40,8 @@ modifyParser :: (String -> String) -> Parser ()
 modifyParser f = liftStateOp $ modify f
 
 raiseError :: ParseError -> Parser a
-raiseError err = Parser $ StateT $ \_ -> ExceptT $ return $ Left err
+raiseError (ParseError e r) = Parser $ StateT $ \s ->
+    ExceptT $ return $ Left $ ParseError e (r ++ " RemainingInput: " ++ s)
 
 
 parseEof :: Parser ()
@@ -113,7 +114,8 @@ string s = mapM char s
 
 
 number :: Parser Int
-number = read <$> removeSucceddingSpaces (many1 (satisfy "parseDigit" isDigit))
+number = read <$> (many1 (satisfy "parseDigit" isDigit) `discard` spaces)
+
 
 optional :: Parser a -> Parser (Maybe a)
 optional x = (Just <$> x) <|> return Nothing
@@ -152,22 +154,12 @@ brackets :: Parser a -> Parser a
 brackets = between (symbol "[") (symbol "]")
 
 
-parseNull :: Parser ()
-parseNull = do
-    _ <- symbol "null"
-    return ()
-
-parseQuotedString :: Parser String
-parseQuotedString = between (symbol "\"")
-                            (symbol "\"")
-                            (many parseNonquoteChar)
-    where parseNonquoteChar = satisfy "parseNonquoteChar" (\c -> c /= '"')
 
 sepBy, sepBy1 :: Parser a -> Parser sep -> Parser [a]
 sepBy p s = sepBy1 p s <|> return []
 sepBy1 p s = do
     first <- p
-    rest  <- many (s >> p) -- stručněji jako 'many (s >> p)'
+    rest  <- many (s >> p)
     return (first : rest)
 
 parseListOf :: Parser a -> Parser [a]
@@ -178,6 +170,16 @@ choice desc = foldr (<|>) noMatch
     where noMatch = raiseError $ ParseError desc "no match"
 
 
+discard :: Parser a -> Parser b -> Parser a
+discard p1 p2 = do
+    x <- p1
+    _ <- p2
+    return x
+
+
+parens :: Parser a -> Parser a
+parens = between (symbol "(") (symbol ")")
+
 
 ------------------------------------------
 parseUnaryOp
@@ -186,8 +188,18 @@ parseUnaryOp trans parserChar parserExp = trans <$> (parserChar >> parserExp)
 
 
 parseRelOp :: Parser Expression
-parseRelOp =
-    parseLeftAssoc parseAddOp (symbol "==" >> return (RelExpression Eq))
+parseRelOp = parseLeftAssoc
+    parseAddOp
+    (choice
+        "== / != / > / < / >= / <="
+        [ symbol "==" >> return (RelExpression Eq)
+        , symbol "!=" >> return (RelExpression Neq)
+        , symbol ">" >> return (RelExpression Gt)
+        , symbol "<" >> return (RelExpression Lt)
+        , symbol ">=" >> return (RelExpression Ge)
+        , symbol "<=" >> return (RelExpression Le)
+        ]
+    )
 
 
 parseAddOp :: Parser Expression
@@ -219,26 +231,41 @@ removeSucceddingSpaces p = do
 
 
 parseId :: Parser [Char]
-parseId = removeSucceddingSpaces (many1 $ satisfy "parseId" isAlphaNum)
+parseId = (many1 (satisfy "parseId" isAlphaNum)) `discard` spaces
+
 parseVar :: Parser Expression
 parseVar = VarExpression <$> parseId
 
-parens :: Parser a -> Parser a
-parens = between (symbol "(") (symbol ")")
-
 parseExprList :: Parser [Expression]
 parseExprList = parens $ parseExpression `sepBy` symbol ","
-parseFunctionCall :: Parser FunctionCall
-parseFunctionCall = FunctionCall <$> parseId <*> parseExprList
 
+
+parseFunctionCall :: Parser FunctionCall
+parseFunctionCall = do
+    id'   <- parseId
+    exprs <- parseExprList
+    return $ FunctionCall id' exprs
+
+parseNull :: Parser Value
+parseNull = do
+    _ <- symbol "null"
+    return Null
+
+parseBool :: Parser Bool
+parseBool = do
+    choice "true / false"
+           [symbol "true" >> return True, symbol "false" >> return False]
 
 parseFactor :: Parser Expression
 parseFactor = choice
     "functor"
-    [ FunctionCallExpression <$> parseFunctionCall -- f(x,y)
-    , ValueExpression <$> IntValue <$> number -- 1234
-    , parens parseExpression --(expression)
+    [  -- f(x,y)
+      parens parseExpression --(expression)
     , parseSigned parseFactor -- +x, -x
+    , FunctionCallExpression <$> parseFunctionCall
+    , ValueExpression . IntValue <$> number
+    , ValueExpression . BoolValue <$> parseBool
+    , ValueExpression <$> parseNull
     , parseVar -- x
     ]
 
@@ -253,29 +280,24 @@ parseSigned expr = choice
 parseExpression :: Parser Expression
 parseExpression = parseRelOp
 
----------------------------------
--- Statements
+----------------------------------- Statements
 parseStatement :: Parser Statement
 parseStatement = choice
     "parseStatment"
     [ Assign <$> parseId <*> (symbol ":=" >> parseExpression)
-    , FunctionCallStmt <$> parseFunctionCall
     , parseIfStatement
     , parseWhileStatement
+    , CompoundStmt <$> parseCompoundStatement
+    , FunctionCallStmt <$> parseFunctionCall
     ]
 
 
 parseCompoundStatement :: Parser Block
 parseCompoundStatement = do
     _     <- symbol "begin"
-    stmts <- many $ parseInfront parseStatement (symbol ";")
+    stmts <- many1 $ parseStatement `discard` (symbol ";")
     _     <- symbol "end"
     return stmts
-
-
-parseSimpleOrCompoundStatement :: Parser Block
-parseSimpleOrCompoundStatement =
-    parseCompoundStatement <|> ((: []) <$> parseStatement)
 
 
 parseIfStatement :: Parser Statement
@@ -283,26 +305,29 @@ parseIfStatement = do
     _        <- symbol "if"
     cond     <- parseExpression
     _        <- symbol "then"
-    thenStmt <- parseSimpleOrCompoundStatement
-    _        <- symbol "else"
-    elseStmt <- optional parseSimpleOrCompoundStatement
+    thenStmt <- parseStatement
+    elseStmt <- optional (symbol "else" >> parseStatement)
     case elseStmt of
-        Nothing -> return $ If cond thenStmt []
-        Just st -> return $ If cond thenStmt st
+        Nothing -> return $ If cond [thenStmt] []
+        Just st -> return $ If cond [thenStmt] [st]
 
 parseWhileStatement :: Parser Statement
 parseWhileStatement = do
     _    <- symbol "while"
     cond <- parseExpression
     _    <- symbol "do"
-    While cond <$> parseSimpleOrCompoundStatement
+    stmt <- parseStatement
+    return $ While cond [stmt]
 
 
 
 parseType :: Parser Type
 parseType = choice
     "parseType"
-    [symbol "integer" >> return IntType, symbol "boolean" >> return BoolType]
+    [ symbol "integer" >> return IntType
+    , symbol "boolean" >> return BoolType
+    , symbol "null" >> return NullType
+    ]
 
 parseIdListWithType :: Parser [(Id, Type)]
 parseIdListWithType = do
@@ -310,6 +335,10 @@ parseIdListWithType = do
     _     <- symbol ":"
     type' <- parseType
     return $ map (\id' -> (id', type')) ids
+
+
+
+-----------------------------------Block parser
 
 parseVarDeclaration :: Parser [Statement]
 parseVarDeclaration = do
@@ -325,36 +354,31 @@ parseFunctionDeclaration = do
     _    <- symbol "function"
     name <- parseId
     args <-
-        concat <$> parens (parseIdListWithType `sepBy` symbol ";") <|> return []
+        concat
+            <$> (parens (parseIdListWithType `sepBy` symbol ";") <|> return [])
     _       <- symbol ":"
     retType <- parseType
+    _       <- symbol ";"
     body    <- parseBlock
     return $ DefFc name (Func args body name retType)
 
 
 
-
 parseBlock :: Parser Block
 parseBlock = do
-    vars <- concat <$> many (parseInfront parseVarDeclaration (symbol ";"))
-    fcs  <- many $ parseInfront parseFunctionDeclaration (symbol ";")
+    vars <- concat <$> many (parseVarDeclaration `discard` symbol ";")
+    fcs  <- many $ parseFunctionDeclaration `discard` symbol ";"
     body <- parseCompoundStatement
     return $ vars ++ fcs ++ body
 
 
+---Program parser
+
 parseProgram :: Parser Program
 parseProgram = do
     _     <- symbol "program"
-    name  <- parseInfront parseId (symbol ";")
+    name  <- parseId `discard` symbol ";"
     block <- parseBlock
     _     <- symbol "."
     return $ Program name block
 
-
-
-
-parseInfront :: Parser a -> Parser b -> Parser a
-parseInfront p1 p2 = do
-    x <- p1
-    _ <- p2
-    return x

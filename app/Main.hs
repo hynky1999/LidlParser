@@ -30,8 +30,7 @@ main = do
                     putStrLn $ "Error: " ++ show err
                     exitFailure
                 Right p -> do
-                    result <- interpret (evalProgram p)
-                                        (Store Map.empty Map.empty)
+                    result <- interpret (evalProgram p) emptyStore
                     case result of
                         Left err -> do
                             putStrLn $ "Error: " ++ show err

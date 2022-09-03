@@ -7,8 +7,10 @@ module Interpreter where
 
 import qualified Data.Map                      as Map
 
+import           Data.Maybe                     ( listToMaybe )
 import           Expressions
 import           State
+import           Text.Read
 
 
 
@@ -80,7 +82,7 @@ liftStateOp :: StateT Store (ExceptT RuntimeError IO) a -> Interpreter a
 liftStateOp = Interpreter
 
 getInterpreter :: Interpreter Store
-getInterpreter = liftStateOp get
+getInterpreter = liftStateOp get'
 
 setInterpreter :: Store -> Interpreter ()
 setInterpreter store = liftStateOp $ set store
@@ -123,10 +125,7 @@ evalRelExpression :: RelOp -> Expression -> Expression -> Interpreter Value
 evalRelExpression op exp1 exp2 = do
     val1 <- evalExpr exp1
     val2 <- evalExpr exp2
-    case op of
-        Eq  -> return $ BoolValue $ val1 == val2
-        Neq -> return $ BoolValue $ val1 /= val2
-
+    evalRelOp op val1 val2
 
 evalNumExpression :: NumOp -> Expression -> Expression -> Interpreter Value
 evalNumExpression op exp1 exp2 = do
@@ -135,6 +134,7 @@ evalNumExpression op exp1 exp2 = do
     evalNumOp op v1 v2
 
 evalNumOp :: NumOp -> Value -> Value -> Interpreter Value
+evalRelOp :: RelOp -> Value -> Value -> Interpreter Value
 
 
 evalUnaryExpression :: UnaryOp -> Expression -> Interpreter Value
@@ -205,18 +205,29 @@ evalStatement scope stmt = case stmt of
     If cond ifBlock elseBlock -> evalIf scope cond ifBlock elseBlock
     While cond block          -> evalWhile scope cond block
     FunctionCallStmt fcCall   -> evalFunctionCall fcCall >> return ()
+    IOInteropStmt op exprs    -> evalInterOpIO op exprs
+    CompoundStmt stmts        -> evalBlock scope stmts
 
 
-
-evalBuiltInCall :: BuiltInFunction -> [Expression] -> Interpreter Value
-evalBuiltInCall fc exprs = do
-    case fc of
-        Print -> do
-            vals <- mapM evalExpr exprs
-            _    <- liftIO $ mapM_ print vals
-            return Null
-
-
+evalInterOpIO :: IOInterop -> [Expression] -> Interpreter ()
+evalInterOpIO op exprs = case op of
+    Print -> do
+        values <- mapM evalExpr exprs
+        liftIO $ mapM_ print values
+    Read -> do
+        if length exprs /= 1
+            then raiseError "Invalid number of arguments"
+            else case listToMaybe exprs of
+                Nothing -> raiseError "Read requires variable name"
+                Just (VarExpression var) -> do
+                    value <- liftIO $ getLine
+                    -- This would be string value if we supported it
+                    let intValue = readMaybe value :: Maybe Int
+                    case intValue of
+                        Just int ->
+                            evalAssign var (ValueExpression $ IntValue int)
+                        Nothing -> raiseError "Invalid input"
+                Just _ -> raiseError "Read requires variable name"
 
 
 evalAssign :: Id -> Expression -> Interpreter ()
@@ -224,7 +235,7 @@ evalAssign name expr = do
     val   <- evalExpr expr
     store <- getInterpreter
     case varLookUpAllStacks store name of
-        Nothing -> raiseError $ "Variable " ++ name ++ "not defined"
+        Nothing -> raiseError $ "Variable " ++ name ++ " not defined"
         Just (varVal, scope) -> do
             -- strict Type check
 
@@ -276,7 +287,23 @@ evalBlock scope stmts = do
 
 
 evalProgram :: Program -> Interpreter ()
-evalProgram (Program _ stmts) = evalBlock Global stmts
+evalProgram (Program _ stmts) = do
+    let builtinsDefs = map (uncurry DefFc) builtins
+    evalBlock Global (builtinsDefs ++ stmts)
+
+
+builtins :: [(Id, Func)]
+builtins =
+    [ ( "WriteLn"
+      , Func [("x", IntType)]
+             [IOInteropStmt Print [VarExpression "x"]]
+             "z"
+             NullType
+      )
+    , ( "ReadLn"
+      , Func [] [IOInteropStmt Read [VarExpression "ret"]] "ret" IntType
+      )
+    ]
 
 --------------------------------------------------------------------------------
 -- Unfortunately it has to be defined function by function and not type by type :/
@@ -303,3 +330,29 @@ evalUnaryOp op (IntValue this) = case op of
 -- Bool definitions of operations
 evalUnaryOp _ (BoolValue _) = raiseError "Invalid operation"
 evalUnaryOp _ Null          = raiseError "Invalid operation"
+
+
+evalRelOp op (IntValue this) other = case other of
+    IntValue o -> case op of
+        Lt  -> return $ BoolValue $ this < o
+        Le  -> return $ BoolValue $ this <= o
+        Gt  -> return $ BoolValue $ this > o
+        Ge  -> return $ BoolValue $ this >= o
+        Eq  -> return $ BoolValue $ this == o
+        Neq -> return $ BoolValue $ this /= o
+    _ -> raiseError "Invalid operation"
+
+evalRelOp op (BoolValue this) other = case other of
+    BoolValue o -> case op of
+        Eq  -> return $ BoolValue $ this == o
+        Neq -> return $ BoolValue $ this /= o
+        _   -> raiseError "Invalid operation"
+    _ -> raiseError "Invalid operation"
+
+evalRelOp op Null other = case other of -- Null is only equal to Null
+    Null -> case op of
+        Eq  -> return $ BoolValue True
+        Neq -> return $ BoolValue False
+        _   -> raiseError "Invalid operation"
+    _ -> raiseError "Invalid operation"
+

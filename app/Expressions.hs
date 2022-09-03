@@ -2,7 +2,7 @@ module Expressions where
 
 {-# LANGUAGE DeriveDataTypeable #-}
 
-data RelOp = Eq | Neq deriving (Show, Eq)
+data RelOp = Eq | Neq | Ge | Le | Gt | Lt deriving (Show, Eq)
 
 data NumOp = Add | Sub | Mul | Div deriving (Show, Eq)
 
@@ -35,7 +35,7 @@ data Expression =
     | VarExpression Id
     | NumExpression {numOp :: NumOp, left :: Expression, right :: Expression}
     | RelExpression {relOp :: RelOp, left :: Expression, right :: Expression}
-    | ValueExpression {value :: Value}
+    | ValueExpression Value
     | UnaryExpression {unaryOp :: UnaryOp, right :: Expression}
     deriving (Show, Eq)
 
@@ -52,11 +52,10 @@ data Func = Func
 
     deriving (Show, Eq)
 
-data BuiltInFunction = Print
-    deriving (Show, Eq)
-
 
 data Scope = Global | Local deriving (Show, Eq)
+
+data IOInterop = Print | Read deriving (Show, Eq)
 
 data Statement = Assign Id Expression        -- <var> = <expr>
                 | DefVar Id Type -- type <var>
@@ -64,7 +63,11 @@ data Statement = Assign Id Expression        -- <var> = <expr>
                 | FunctionCallStmt FunctionCall -- f(x)
                 | If Expression Block Block -- if <expr> <block> else <block>
                 | While Expression Block -- while <expr> <block>
+                | IOInteropStmt IOInterop [Expression]
+                | CompoundStmt Block
     deriving (Show, Eq)
+
+
 
 -- | Skupina příkazů je blok
 type Block = [Statement]

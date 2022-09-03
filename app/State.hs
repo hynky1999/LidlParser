@@ -24,8 +24,8 @@ instance Monad m => Monad (StateT s m) where
         runStateT stavovyVypocet' s'           -- který spustíme aplikací na nový stav
 
 -- | Vrátí aktuální stav
-get :: Monad m => StateT s m s
-get = StateT $ \s -> return (s, s)
+get' :: Monad m => StateT s m s
+get' = StateT $ \s -> return (s, s)
 
 -- | Nastaví nový stav
 set :: Monad m => s -> StateT s m ()
