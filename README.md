@@ -17,6 +17,7 @@
     - `<`
     - `>=`
     - `<=`
+    - `mod`
 
 - BuiltinFunctions
     - WriteLn (x : integer) : null
