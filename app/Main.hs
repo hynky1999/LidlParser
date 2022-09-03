@@ -4,8 +4,10 @@ import           Data.Maybe                     ( fromJust
                                                 , isNothing
                                                 )
 import           Expressions                    ( Program )
-import           Interpreter
+-- import           Interpreter
 import           Parser
+
+import           Interpreter
 import           System.Environment
 import           System.Exit
 
@@ -13,13 +15,6 @@ usage :: String
 usage = "Usage: ./Main <input file>"
 
 
-handleParserError :: Either ParseError a -> IO a
-handleParserError (Left  err ) = print err >> exitFailure
-handleParserError (Right prog) = return prog
-
-handleInterpreterError :: Either RuntimeError a -> IO ()
-handleInterpreterError (Left  err) = print err >> exitFailure
-handleInterpreterError (Right _  ) = return ()
 
 
 main :: IO ()
@@ -29,12 +24,19 @@ main = do
         then do
             let filename = head args
             contents <- readFile filename
-            program  <- handleParserError $ parse parseProgram contents
-            _        <- handleInterpreterError $ interpret
-                (evalProgram program)
-                (Store Map.empty Map.empty)
-            putStrLn "Program executed successfully"
+            let program = parse parseProgram contents
+            case program of
+                Left err -> do
+                    putStrLn $ "Error: " ++ show err
+                    exitFailure
+                Right p -> do
+                    result <- interpret (evalProgram p)
+                                        (Store Map.empty Map.empty)
+                    case result of
+                        Left err -> do
+                            putStrLn $ "Error: " ++ show err
+                            exitFailure
+                        Right res ->
+                            putStrLn $ "Program finished with success."
         else putStrLn usage
-
-
 

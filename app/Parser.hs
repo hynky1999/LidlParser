@@ -1,25 +1,16 @@
+{-# OPTIONS_GHC -Wall #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Parser where
 
-import           Control.Exception              ( AssertionFailed
-                                                    ( AssertionFailed
-                                                    )
-                                                , SomeException
-                                                , catch
-                                                , evaluate
-                                                )
 import           Data.Char                      ( isAlphaNum
                                                 , isDigit
                                                 , isSpace
                                                 )
-import           Prelude                 hiding ( minimum )
 import           State
-import           System.IO                      ( hSetEncoding
-                                                , stdout
-                                                , utf8
-                                                )
-import           System.IO.Unsafe               ( unsafePerformIO )
 
 import           Expressions
+
 
 
 data ParseError = ParseError
@@ -33,106 +24,71 @@ instance Show ParseError where
     show err =
         "expected: " <> errorExpected err <> ", but found: " <> errorFound err
 
-newtype Parser a = Parser {runParser :: State String (Either ParseError a)}
+newtype Parser a = Parser {runParser :: StateT String (ExceptT ParseError DummyMonad) a}
+  deriving newtype (Functor, Applicative, Monad) -- magie, StateT ... už je monáda, tak to jen práskneme Haskellu
+
+liftStateOp :: StateT String (ExceptT ParseError DummyMonad) a -> Parser a
+liftStateOp = Parser
+
+getParser :: Parser String
+getParser = liftStateOp get
+
+setParser :: String -> Parser ()
+setParser store = Parser $ set store
+
+modifyParser :: (String -> String) -> Parser ()
+modifyParser f = liftStateOp $ modify f
+
+raiseError :: ParseError -> Parser a
+raiseError err = Parser $ StateT $ \_ -> ExceptT $ return $ Left err
 
 
 parseEof :: Parser ()
-parseEof = Parser $ do
-    input <- get
+parseEof = do
+    input <- getParser
     case input of
-        []      -> return $ Right ()
-        (c : _) -> return $ Left $ ParseError "end of file" [c]
+        []      -> return ()
+        (c : _) -> raiseError $ ParseError "end of file" [c]
 
 parseAny :: Parser Char
-parseAny = Parser $ do -- pracujeme v 'State' monádě, vnitřek má typ 'State String (Either ParseError Char)'
-    input <- get
+parseAny = do
+    input <- getParser
     case input of
-        []       -> return $ Left expectedCharError
+        []       -> raiseError $ ParseError "any character" "end of file"
         (c : cs) -> do
-            set cs
-            return $ Right c
-
-
-expectedCharError :: ParseError
-expectedCharError = ParseError "any character" "end of file"
-
-
-
-mapParser :: (a -> b) -> Parser a -> Parser b
-mapParser f (Parser p) = Parser $ do -- do-notace je pro 'State String' monádu
-    result <- p
-    case result of
-        Left  err -> return $ Left err
-        Right a   -> return $ Right $ f a
-
-
-instance Functor Parser where
-    fmap = mapParser
-
-returnParser :: a -> Parser a
-returnParser x = Parser $ do
-    return $ Right x
-
-andThenParser :: Parser a -> (a -> Parser b) -> Parser b
-andThenParser (Parser p) f = Parser $ do
-    result <- p
-    case result of
-        Right x   -> runParser (f x)
-        Left  err -> return $ Left err
-
-
-instance Monad Parser where
-    return = returnParser
-    (>>=)  = andThenParser
-
-instance Applicative Parser where
-    pure = return
-    mf <*> mx = do
-        f <- mf
-        x <- mx
-        return $ f x
-
+            _ <- setParser cs
+            return c
 
 
 (<|>) :: Parser a -> Parser a -> Parser a
-(Parser p1) <|> (Parser p2) = Parser $ do
-    backup  <- get
-    result1 <- p1
-    case result1 of
-        Left err -> do
-            set backup
-            x <- p2
-            return x
+(Parser p1) <|> (Parser p2) = Parser $ StateT $ \s -> ExceptT $ do
+    a <- runExceptT $ runStateT p1 s
+    case a of
+        Left  _ -> runExceptT $ runStateT p2 s
         Right x -> return $ Right x
-
-
-
-
--- | Pomocná funkce, která načte tři písmenka.
-parseThreeLetters :: Parser String
-parseThreeLetters = do
-    x <- parseAny
-    y <- parseAny
-    z <- parseAny
-    return [x, y, z]
-
-parseError :: String -> String -> Parser a
-parseError expected found = Parser $ return $ Left $ ParseError expected found
 
 
 satisfy :: String -> (Char -> Bool) -> Parser Char
 satisfy description p = do -- do-notace pro 'Parser Char'
     c <- parseAny
-    if p c then return c else parseError description [c]
+    if p c then return c else raiseError $ ParseError description [c]
 
 
 parse :: Parser a -> String -> Either ParseError a
-parse p s = snd $ runState (runParser go) s
+parse p s = runDummyMonad $ runExceptT $ do
+    result <- runStateT (runParser go) s
+    return $ snd result
+
   where
-    go = do -- do-notace pro 'Parser a'
+    go = do
         result <- p
         parseEof
         return result
+
+parseDebug :: Parser a -> String -> Either ParseError String
+parseDebug p s = runDummyMonad $ runExceptT $ do
+    result <- runStateT (runParser p) s
+    return $ fst result
 
 char :: Char -> Parser Char
 char c = satisfy [c] (== c)
@@ -163,6 +119,7 @@ optional :: Parser a -> Parser (Maybe a)
 optional x = (Just <$> x) <|> return Nothing
 
 
+parseLeftAssoc :: Parser t -> Parser (t -> t -> t) -> Parser t
 parseLeftAssoc p op = do
     x <- p
     process x
@@ -185,10 +142,10 @@ symbol s = do
     return result
 
 between :: Parser a -> Parser c -> Parser b -> Parser b
-between left right p = do
-    _      <- left
+between l r p = do
+    _      <- l
     result <- p
-    _      <- right
+    _      <- r
     return result
 
 brackets :: Parser a -> Parser a
@@ -217,7 +174,8 @@ parseListOf :: Parser a -> Parser [a]
 parseListOf p = brackets $ p `sepBy` symbol ","
 
 choice :: String -> [Parser a] -> Parser a
-choice desc = foldr (<|>) noMatch where noMatch = parseError desc "no match"
+choice desc = foldr (<|>) noMatch
+    where noMatch = raiseError $ ParseError desc "no match"
 
 
 
@@ -260,13 +218,17 @@ removeSucceddingSpaces p = do
     return x
 
 
+parseId :: Parser [Char]
 parseId = removeSucceddingSpaces (many1 $ satisfy "parseId" isAlphaNum)
+parseVar :: Parser Expression
 parseVar = VarExpression <$> parseId
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
+parseExprList :: Parser [Expression]
 parseExprList = parens $ parseExpression `sepBy` symbol ","
+parseFunctionCall :: Parser FunctionCall
 parseFunctionCall = FunctionCall <$> parseId <*> parseExprList
 
 
@@ -282,10 +244,10 @@ parseFactor = choice
 
 
 parseSigned :: Parser Expression -> Parser Expression
-parseSigned exp = choice
+parseSigned expr = choice
     "signedExpression"
-    [ parseUnaryOp (UnaryExpression Neg) (symbol "-") exp
-    , parseUnaryOp (UnaryExpression Pos) (symbol "+") exp
+    [ parseUnaryOp (UnaryExpression Neg) (symbol "-") expr
+    , parseUnaryOp (UnaryExpression Pos) (symbol "+") expr
     ]
 
 parseExpression :: Parser Expression
@@ -347,7 +309,7 @@ parseIdListWithType = do
     ids   <- parseId `sepBy1` symbol ","
     _     <- symbol ":"
     type' <- parseType
-    return $ map (\id -> (id, type')) ids
+    return $ map (\id' -> (id', type')) ids
 
 parseVarDeclaration :: Parser [Statement]
 parseVarDeclaration = do
@@ -356,7 +318,7 @@ parseVarDeclaration = do
 
 
 typeDefsAsStatement :: [(Id, Type)] -> [Statement]
-typeDefsAsStatement = map (uncurry Define)
+typeDefsAsStatement = map (uncurry DefVar)
 
 parseFunctionDeclaration :: Parser Statement
 parseFunctionDeclaration = do
@@ -367,7 +329,7 @@ parseFunctionDeclaration = do
     _       <- symbol ":"
     retType <- parseType
     body    <- parseBlock
-    return $ FunctionDef name (Func args body name retType)
+    return $ DefFc name (Func args body name retType)
 
 
 

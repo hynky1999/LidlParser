@@ -121,7 +121,7 @@ parserFunction = do
         parse parseFunctionDeclaration
               "function f(x,y : integer) : integer\nbegin\nf:=x+y;\nend"
             `shouldBe` Right
-                           (FunctionDef
+                           (DefFc
                                "f"
                                (Func
                                    [("x", IntType), ("y", IntType)]
@@ -138,12 +138,12 @@ parserFunction = do
                            )
     it "should parse program" $ do
         parse parseProgram
-              "program p;\nvar x,y : integer;\nbegin\nx:=1;\ny:=2;\nend"
+              "program p;\nvar x,y : integer;\nbegin\nx:=1;\ny:=2;\nend."
             `shouldBe` Right
                            (Program
                                "p"
-                               [ Define "x" IntType
-                               , Define "y" IntType
+                               [ DefVar "x" IntType
+                               , DefVar "y" IntType
                                , Assign "x" (ValueExpression (IntValue 1))
                                , Assign "y" (ValueExpression (IntValue 2))
                                ]
