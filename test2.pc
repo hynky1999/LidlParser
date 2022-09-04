@@ -17,5 +17,5 @@ begin
    b := ReadLn();
    ret := max(a, b);
    
-   WriteLn(2);
+   WriteLn(ret);
 end.
